@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -42,6 +43,7 @@ namespace Gelato.Decorators
         private IMediaSourceProvider[] _providers;
         private readonly IDirectoryService _directoryService;
         private readonly KeyLock _lock = new();
+        private readonly ConcurrentDictionary<string, byte> _preProbeInFlight = new();
 
         public MediaSourceManagerDecorator(
             IMediaSourceManager inner,
@@ -386,20 +388,7 @@ namespace Gelato.Decorators
 
             var manager = _manager.Value;
             var ctx = _http.HttpContext;
-
-            static bool NeedsProbe(MediaSourceInfo s) =>
-                (s.MediaStreams?.All(ms => ms.Type != MediaStreamType.Video) ?? true)
-                || (s.RunTimeTicks ?? 0) < TimeSpan.FromMinutes(2).Ticks;
-
-            //BaseItem ResolveOwnerFor(MediaSourceInfo s, BaseItem fallback) =>
-            //    Guid.TryParse(s.Id, out var g)
-            //        ? (_libraryManager.GetItemById(g) ?? fallback)
-            //        : fallback;
-
-            BaseItem ResolveOwnerFor(MediaSourceInfo s, BaseItem fallback) =>
-                Guid.TryParse(s.ETag, out var g)
-                    ? (_libraryManager.GetItemById(g) ?? fallback)
-                    : fallback;
+            var cfg = GelatoPlugin.Instance!.GetConfig(user?.Id ?? Guid.Empty);
 
             static MediaSourceInfo? SelectByIdOrFirst(IReadOnlyList<MediaSourceInfo> list, Guid? id)
             {
@@ -448,27 +437,18 @@ namespace Gelato.Decorators
                     return sources;
             }
 
+            QueueTopStreamPreProbe(
+                item,
+                sources,
+                selected,
+                cfg.TopStreamPreProbeCount,
+                cfg.TopStreamPreProbeConcurrency,
+                cfg.EnableTopStreamPreProbe
+            );
+
             if (NeedsProbe(selected))
             {
-                var v = owner.IsVirtualItem;
-                owner.IsVirtualItem = false;
-
-                await owner
-                    .RefreshMetadata(
-                        new MetadataRefreshOptions(_directoryService)
-                        {
-                            EnableRemoteContentProbe = true,
-                            MetadataRefreshMode = MetadataRefreshMode.FullRefresh,
-                        },
-                        ct
-                    )
-                    .ConfigureAwait(false);
-
-                owner.IsVirtualItem = v;
-
-                await owner
-                    .UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct)
-                    .ConfigureAwait(false);
+                await ProbeOwnerMetadataAsync(owner, ct).ConfigureAwait(false);
 
                 var refreshed = GetStaticMediaSources(item, enablePathSubstitution, user);
                 selected = SelectByIdOrFirst(refreshed, mediaSourceId);
@@ -505,6 +485,103 @@ namespace Gelato.Decorators
             }
 
             return new[] { selected };
+        }
+
+        private static bool NeedsProbe(MediaSourceInfo s) =>
+            (s.MediaStreams?.All(ms => ms.Type != MediaStreamType.Video) ?? true)
+            || (s.RunTimeTicks ?? 0) < TimeSpan.FromMinutes(2).Ticks;
+
+        private BaseItem ResolveOwnerFor(MediaSourceInfo s, BaseItem fallback) =>
+            Guid.TryParse(s.ETag, out var g) ? (_libraryManager.GetItemById(g) ?? fallback) : fallback;
+
+        private void QueueTopStreamPreProbe(
+            BaseItem rootItem,
+            IReadOnlyList<MediaSourceInfo> sources,
+            MediaSourceInfo selected,
+            int topCount,
+            int maxConcurrency,
+            bool enabled
+        )
+        {
+            if (!enabled || topCount <= 0 || maxConcurrency <= 0 || sources.Count <= 1)
+            {
+                return;
+            }
+
+            var selectedId = selected?.ETag ?? selected?.Id;
+            var candidates = sources
+                .Where(NeedsProbe)
+                .Where(s => !string.Equals(s.ETag ?? s.Id, selectedId, StringComparison.OrdinalIgnoreCase))
+                .Take(topCount)
+                .ToList();
+
+            if (candidates.Count == 0)
+            {
+                return;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                using var semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+                var tasks = candidates.Select(async source =>
+                {
+                    var key = source.ETag ?? source.Id;
+                    if (string.IsNullOrWhiteSpace(key) || !_preProbeInFlight.TryAdd(key, 0))
+                    {
+                        return;
+                    }
+
+                    await semaphore.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                    try
+                    {
+                        var owner = ResolveOwnerFor(source, rootItem);
+                        await ProbeOwnerMetadataAsync(owner, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogDebug(
+                            ex,
+                            "Background stream probe failed for source {SourceId} item {ItemId}",
+                            source.Id,
+                            rootItem.Id
+                        );
+                    }
+                    finally
+                    {
+                        semaphore.Release();
+                        _preProbeInFlight.TryRemove(key, out _);
+                    }
+                });
+
+                await Task.WhenAll(tasks).ConfigureAwait(false);
+            });
+        }
+
+        private async Task ProbeOwnerMetadataAsync(BaseItem owner, CancellationToken ct)
+        {
+            var previousVirtual = owner.IsVirtualItem;
+            owner.IsVirtualItem = false;
+            try
+            {
+                await owner
+                    .RefreshMetadata(
+                        new MetadataRefreshOptions(_directoryService)
+                        {
+                            EnableRemoteContentProbe = true,
+                            MetadataRefreshMode = MetadataRefreshMode.FullRefresh,
+                        },
+                        ct
+                    )
+                    .ConfigureAwait(false);
+
+                await owner
+                    .UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                owner.IsVirtualItem = previousVirtual;
+            }
         }
 
         public Task<MediaSourceInfo> GetMediaSource(

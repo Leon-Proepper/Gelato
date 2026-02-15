@@ -42,6 +42,9 @@ namespace Gelato.Configuration
         public int P2PULSpeed { get; set; } = 0;
         public string FFmpegAnalyzeDuration { get; set; } = "5M";
         public string FFmpegProbeSize { get; set; } = "40M";
+        public bool EnableTopStreamPreProbe { get; set; } = true;
+        public int TopStreamPreProbeCount { get; set; } = 10;
+        public int TopStreamPreProbeConcurrency { get; set; } = 4;
         public bool CreateCollections { get; set; } = false;
         public int MaxCollectionItems { get; set; } = 100;
         public bool DisableSearch { get; set; } = false;
@@ -118,6 +121,9 @@ namespace Gelato.Configuration
                 P2PULSpeed = baseConfig.P2PULSpeed,
                 FFmpegAnalyzeDuration = baseConfig.FFmpegAnalyzeDuration,
                 FFmpegProbeSize = baseConfig.FFmpegProbeSize,
+                EnableTopStreamPreProbe = baseConfig.EnableTopStreamPreProbe,
+                TopStreamPreProbeCount = baseConfig.TopStreamPreProbeCount,
+                TopStreamPreProbeConcurrency = baseConfig.TopStreamPreProbeConcurrency,
                 CreateCollections = baseConfig.CreateCollections,
                 MaxCollectionItems = baseConfig.MaxCollectionItems,
                 UserConfigs = baseConfig.UserConfigs,

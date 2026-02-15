@@ -131,6 +131,28 @@
           </div>
 
           <div class="verticalSection">
+            <h3 class="sectionTitle">Stream metadata pre-probe</h3>
+
+            <div class="checkboxContainer checkboxContainer-withDescription">
+              <label>
+                <input is="emby-checkbox" type="checkbox" id="chkEnableTopStreamPreProbe" />
+                <span>Pre-probe top stream candidates in background</span>
+              </label>
+              <div class="fieldDescription">Runs ffmpeg probe for top matching streams (excluding selected source) to populate metadata before playback switches.</div>
+            </div>
+
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="txtTopStreamPreProbeCount">Top stream candidates to pre-probe:</label>
+              <input is="emby-input" type="number" id="txtTopStreamPreProbeCount" class="emby-input" />
+            </div>
+
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="txtTopStreamPreProbeConcurrency">Max concurrent probes:</label>
+              <input is="emby-input" type="number" id="txtTopStreamPreProbeConcurrency" class="emby-input" />
+            </div>
+          </div>
+
+          <div class="verticalSection">
             <h3 class="sectionTitle">P2P streaming (BETA)</h3>
 
             <div class="checkboxContainer checkboxContainer-withDescription">
@@ -240,6 +262,9 @@
 
         const txtFFmpegAnalyzeDuration = document.querySelector('#txtFFmpegAnalyzeDuration');
         const txtFFmpegProbeSize = document.querySelector('#txtFFmpegProbeSize');
+        const chkEnableTopStreamPreProbe = document.querySelector('#chkEnableTopStreamPreProbe');
+        const txtTopStreamPreProbeCount = document.querySelector('#txtTopStreamPreProbeCount');
+        const txtTopStreamPreProbeConcurrency = document.querySelector('#txtTopStreamPreProbeConcurrency');
 
         const chkP2PEnabled = document.querySelector('#chkP2PEnabled');
         const txtP2PDLSpeed = document.querySelector('#txtP2PDLSpeed');
@@ -262,6 +287,12 @@
           const disabled = !chkP2PEnabled.checked;
           txtP2PDLSpeed.disabled = disabled;
           txtP2PULSpeed.disabled = disabled;
+        }
+
+        function toggleTopStreamProbeFields() {
+          const disabled = !chkEnableTopStreamPreProbe.checked;
+          txtTopStreamPreProbeCount.disabled = disabled;
+          txtTopStreamPreProbeConcurrency.disabled = disabled;
         }
 
         function getUserName(userId) {
@@ -456,6 +487,10 @@
 
             txtFFmpegAnalyzeDuration.value = (cfg.FFmpegAnalyzeDuration || "5M");
             txtFFmpegProbeSize.value = (cfg.FFmpegProbeSize || "40M");
+            chkEnableTopStreamPreProbe.checked = cfg.EnableTopStreamPreProbe ?? true;
+            txtTopStreamPreProbeCount.value = (cfg.TopStreamPreProbeCount ?? 10).toString();
+            txtTopStreamPreProbeConcurrency.value = (cfg.TopStreamPreProbeConcurrency ?? 4).toString();
+            toggleTopStreamProbeFields();
 
             chkP2PEnabled.checked = cfg.P2PEnabled ?? true;
             txtP2PDLSpeed.value = (cfg.P2PDLSpeed ?? 0).toString();
@@ -492,6 +527,9 @@
 
             cfg.FFmpegAnalyzeDuration = (txtFFmpegAnalyzeDuration.value || "5M").trim();
             cfg.FFmpegProbeSize = (txtFFmpegProbeSize.value || "40M").trim();
+            cfg.EnableTopStreamPreProbe = !!chkEnableTopStreamPreProbe.checked;
+            cfg.TopStreamPreProbeCount = parseInt(txtTopStreamPreProbeCount.value) || 10;
+            cfg.TopStreamPreProbeConcurrency = parseInt(txtTopStreamPreProbeConcurrency.value) || 4;
 
             cfg.P2PEnabled = !!chkP2PEnabled.checked;
             cfg.P2PDLSpeed = parseInt(txtP2PDLSpeed.value) || 0;
@@ -536,6 +574,7 @@
         function init() {
           form.addEventListener("submit", saveConfig);
           chkP2PEnabled.addEventListener("change", toggleP2PFields);
+          chkEnableTopStreamPreProbe.addEventListener("change", toggleTopStreamProbeFields);
           selUserConfig.addEventListener("change", onUserSelected);
           btnAddOverride.addEventListener("click", saveOverride);
           btnCancelOverride.addEventListener("click", clearOverrideForm);
