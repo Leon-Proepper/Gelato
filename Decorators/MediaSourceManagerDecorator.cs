@@ -354,23 +354,44 @@ public sealed class MediaSourceManagerDecorator(
                 return sources;
         }
 
-        if (NeedsProbe(selected))
+        if (allowMediaProbe && NeedsProbe(selected))
         {
-            var libraryOptions = _libraryManager.GetLibraryOptions(owner);
+            await _lock
+                .RunSingleFlightAsync(
+                    owner.Id,
+                    async innerCt =>
+                    {
+                        var currentSources = GetStaticMediaSources(
+                            item,
+                            enablePathSubstitution,
+                            user
+                        );
+                        var currentSelected = SelectByIdOrFirst(currentSources, mediaSourceId);
+                        if (currentSelected is null || !NeedsProbe(currentSelected))
+                        {
+                            return;
+                        }
 
-            var segmentTask = _mediaSegmentManager.RunSegmentPluginProviders(
-                owner,
-                libraryOptions,
-                false,
-                ct
-            );
-            var metadataTask = ProbeStreamAsync((Video)owner, selected.Path, ct);
-            //  var subtitleTask = DownloadSubtitles((Video)owner, ct);
+                        var libraryOptions = _libraryManager.GetLibraryOptions(owner);
+                        var segmentTask = _mediaSegmentManager.RunSegmentPluginProviders(
+                            owner,
+                            libraryOptions,
+                            false,
+                            innerCt
+                        );
+                        var metadataTask = ProbeStreamAsync(
+                            (Video)owner,
+                            currentSelected.Path,
+                            innerCt
+                        );
 
-            await Task.WhenAll(metadataTask, segmentTask).ConfigureAwait(false);
+                        await Task.WhenAll(metadataTask, segmentTask).ConfigureAwait(false);
 
-            await owner
-                .UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct)
+                        await owner
+                            .UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, innerCt)
+                            .ConfigureAwait(false);
+                    }
+                )
                 .ConfigureAwait(false);
 
             var refreshed = GetStaticMediaSources(item, enablePathSubstitution, user);
